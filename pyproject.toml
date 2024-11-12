@@ -14,8 +14,6 @@ dependencies = [
 [tool.uv]
 dev-dependencies = [
     "ruff>=0.7.0",
-    "ruff-lsp>=0.0.58"
-
 ]
 
 [tool.ruff]
