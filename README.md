@@ -1,6 +1,8 @@
 # Audio Transcription System
 這是一個即時音訊轉錄系統，可以捕獲系統音訊並轉換成文字。系統使用 Swift 來捕獲音訊，並使用 MLX Whisper 進行語音轉文字。
 
+![系統截圖](screenshot.jpg)
+
 ## 系統需求
 - macOS 系統
 - Python 3.10+
