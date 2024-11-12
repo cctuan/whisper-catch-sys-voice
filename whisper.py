@@ -8,10 +8,10 @@ from datetime import datetime
 from queue import Empty
 from queue import Queue
 
-import mlx_whisper
 import numpy as np
 
 from helper.translator import translate
+from helper.whisper import transcribe
 
 # 設置參數
 SAMPLE_RATE = 16000
@@ -55,12 +55,7 @@ class AudioProcessor(threading.Thread):
                 # 從隊列中獲取音訊數據，等待1秒
                 audio_data = self.queue.get(timeout=1)
 
-                # 使用 MLX Whisper 處理音訊
-                result = mlx_whisper.transcribe(
-                    audio_data,
-                    path_or_hf_repo="mlx-community/whisper-large-v3-turbo",
-                )
-                # print(result.get("text", ""))
+                result = transcribe(audio_data)
 
                 if result and "text" in result:
                     text = result["text"].strip()
