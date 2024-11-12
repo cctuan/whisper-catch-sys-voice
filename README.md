@@ -9,8 +9,12 @@
 
 ## 安裝步驟
 安裝 Python 依賴：
-```
-pip install numpy mlx-whisper mlx-llm
+```bash
+# 使用 pip
+pip install -r requirements.txt
+
+# 或使用 uv (推薦，安裝更快)
+uv pip install -r requirements.txt
 ```
 編譯 Swift 音訊捕獲程式：
 ```
