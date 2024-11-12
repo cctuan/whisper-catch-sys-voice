@@ -1,3 +1,4 @@
 mlx_whisper
 numpy
 mlx-llm
+openai

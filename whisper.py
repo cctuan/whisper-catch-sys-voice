@@ -1,11 +1,16 @@
+import os
 import subprocess
 import numpy as np
 import mlx_whisper
-from mlx_llm.model import create_model
+from openai import OpenAI
+# from mlx_llm.chat import ChatSetup, LLMChat
 import sys
 import wave
 from datetime import datetime
 import argparse
+import threading
+from queue import Queue, Empty
+import time
 
 # 設置參數
 SAMPLE_RATE = 16000
@@ -35,10 +40,64 @@ swift_process = subprocess.Popen(['./.build/release/SystemAudioCapture'],
                                stderr=subprocess.PIPE,
                                bufsize=0)
 
-model = create_model("phi_3.5_mini_instruct")
+client = OpenAI(
+    # This is the default and can be omitted
+    api_key=os.environ.get("OPENAI_API_KEY"),
+)
 
+def translate_text(text):
+    """將英文文本翻譯成中文"""
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are a translator. Translate the given text to Traditional Chinese briefly and accurately."},
+            {"role": "user", "content": text}
+        ]
+    )
+    return response.choices[0].message.content
+
+# 新增一個處理音訊的線程類
+class AudioProcessor(threading.Thread):
+    def __init__(self, queue):
+        super().__init__()
+        self.queue = queue
+        self.running = True
+
+    def run(self):
+        while self.running:
+            try:
+                # 從隊列中獲取音訊數據，等待1秒
+                audio_data = self.queue.get(timeout=1)
+                
+                # 使用 MLX Whisper 處理音訊
+                result = mlx_whisper.transcribe(
+                    audio_data,
+                    path_or_hf_repo="mlx-community/whisper-large-v3-turbo",
+                )
+                
+                if result and "text" in result:
+                    text = result["text"].strip()
+                    if text:
+                        text = translate_text(text)
+                        print(f"Transcription: {text}")
+                
+            except Empty:
+                continue  # 如果隊列為空，繼續等待
+            except Exception as e:
+                print(f"Error during processing: {e}")
+
+    def stop(self):
+        self.running = False
+
+# 主程序修改
 try:
     audio_buffer = bytearray()
+    # 創建一個隊列來存放待處理的音訊數據
+    process_queue = Queue(maxsize=10)  # 限制隊列大小為10
+    
+    # 啟動處理線程
+    processor = AudioProcessor(process_queue)
+    processor.start()
     
     while True:
         # 讀取音訊數據
@@ -56,30 +115,27 @@ try:
         # 當緩衝區達到目標大小時進行處理
         if len(audio_buffer) >= CHUNK_SIZE * BYTES_PER_SAMPLE:
             # 轉換為 numpy array
-            audio_data = np.frombuffer(audio_buffer, dtype=np.int16).astype(np.float32) / 32768.0
-
-            try:
-                # 使用 MLX Whisper 處理音訊
-                result = mlx_whisper.transcribe(
-                    audio_data,
-                    path_or_hf_repo="mlx-community/whisper-large-v3-turbo",
-                )
-                
-                if result and "text" in result:
-                    text = result["text"].strip()
-                    if text:
-                        print(f"Transcription: {text}")
-                
-            except Exception as e:
-                print(f"Error during transcription: {e}")
+            audio_data = np.frombuffer(audio_buffer[:CHUNK_SIZE * BYTES_PER_SAMPLE], 
+                                     dtype=np.int16).astype(np.float32) / 32768.0
             
-            # 清空緩衝區，為下一塊做準備
-            audio_buffer = bytearray()
+            try:
+                # 非阻塞方式將數據放入處理隊列
+                process_queue.put_nowait(audio_data)
+            except Queue.full:
+                print("Warning: Processing queue is full, skipping chunk")
+            
+            # 保留剩餘的數據
+            audio_buffer = audio_buffer[CHUNK_SIZE * BYTES_PER_SAMPLE:]
 
 except KeyboardInterrupt:
     print("\nStopped listening.")
 finally:
+    # 停止處理線程
+    if 'processor' in locals():
+        processor.stop()
+        processor.join()
     if wav_file:
         wav_file.close()
         print(f"\nAudio saved to: {filename}")
     swift_process.terminate()
+
