@@ -7,14 +7,15 @@
 - Swift 6.0+
 - MLX 框架支援
 
+## 安裝 uv 依賴管理工具
+```bash
+brew install uv
+```
+
 ## 安裝步驟
 安裝 Python 依賴：
 ```bash
-# 使用 pip
-pip install -r requirements.txt
-
-# 或使用 uv (推薦，安裝更快)
-uv pip install -r requirements.txt
+uv sync
 ```
 編譯 Swift 音訊捕獲程式：
 ```
