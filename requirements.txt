@@ -1,0 +1,4 @@
+SpeechRecognition
+mlx_whisper
+numpy
+mlx-llm
