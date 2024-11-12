@@ -31,7 +31,7 @@ uv run whisper.py
 ### 儲存音訊檔案
 使用自動生成的檔名：
 ```
-uv run whisper.py -f 
+uv run whisper.py -f
 ```
 指定檔名：
 ```
