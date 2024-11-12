@@ -2,3 +2,6 @@ mlx_whisper
 numpy
 mlx-llm
 openai
+tk
+pyaudio
+pyproject.toml
