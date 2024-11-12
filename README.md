@@ -26,16 +26,16 @@ swift build -c release
 ## 使用方法
 ### 基本使用
 ```
-python whisper.py
+uv run whisper.py
 ```
 ### 儲存音訊檔案
 使用自動生成的檔名：
 ```
-python whisper.py -f
+uv run whisper.py -f 
 ```
 指定檔名：
 ```
-python whisper.py -f my_recording.wav
+uv run whisper.py -f my_recording.wav
 ```
 
 -f, --file: 儲存音訊到 WAV 檔案
