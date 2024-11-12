@@ -1,5 +1,6 @@
 import argparse
 import os
+import sys
 import subprocess
 import threading
 import wave
@@ -11,6 +12,7 @@ import numpy as np
 from openai import OpenAI
 import tkinter as tk
 from tkinter import ttk
+import pyaudio  # Add this import at the top
 
 # Set parameters
 SAMPLE_RATE = 16000
@@ -22,6 +24,10 @@ BYTES_PER_SAMPLE = 2  # 16-bit = 2 bytes
 parser = argparse.ArgumentParser(description='Audio transcription with optional recording')
 parser.add_argument('-f', '--file', nargs='?', const=True, default=False,
                     help='Save audio to file. Optionally specify filename')
+parser.add_argument('-d', '--debug', action='store_true',
+                    help='Enable debug output including processing times')
+parser.add_argument('-m', '--mic', action='store_true',
+                    help='Use microphone input instead of system audio')
 args = parser.parse_args()
 
 # WAV file setup
@@ -132,13 +138,24 @@ class AudioProcessor(threading.Thread):
         while self.running:
             try:
                 audio_data = self.queue.get(timeout=1)
+                
+                if args.debug:
+                    start_time = datetime.now()
+                    
                 result = mlx_whisper.transcribe(
                     audio_data,
                     path_or_hf_repo="mlx-community/whisper-large-v3-turbo"
                 )
+                
+                if args.debug:
+                    process_time = (datetime.now() - start_time).total_seconds()
+                    print(f"[DEBUG] Whisper transcription took {process_time:.2f} seconds")
+                
                 if result and "text" in result:
                     text = result["text"].strip()
                     if text:
+                        if args.debug:
+                            print(f"[DEBUG] Transcribed text: {text}")
                         translate_text(text)
                         # Place the final translation into the GUI queue
                         # self.gui_queue.put(translated_text)
@@ -150,22 +167,50 @@ class AudioProcessor(threading.Thread):
     def stop(self):
         self.running = False
 
+def get_executable_path(file_name):
+    # 若程式是以打包形式執行，使用 sys._MEIPASS 路徑
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, file_name)
+    else:
+        # 若非打包執行，直接使用原始路徑
+        return os.path.join(os.path.dirname(__file__), '.build/release', file_name)
+
+
 class AudioCapture(threading.Thread):
     def __init__(self, process_queue, wav_file=None):
         super().__init__()
         self.process_queue = process_queue
         self.wav_file = wav_file
         self.running = True
-        self.swift_process = subprocess.Popen(['./.build/release/SystemAudioCapture'], 
-                                   stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE,
-                                   bufsize=0)
         self.audio_buffer = bytearray()
+        if args.mic:
+            self.p = pyaudio.PyAudio()
+            self.stream = self.p.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=SAMPLE_RATE,
+                input=True,
+                frames_per_buffer=1024,  # 使用較小的緩衝區
+                input_device_index=None,  # 使用默認輸入設備
+                stream_callback=None,
+                start=True,  # 立即開始錄音
+            )
+        else:
+            system_audio_path = get_executable_path('SystemAudioCapture')
+            self.swift_process = subprocess.Popen([system_audio_path], 
+                                       stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE,
+                                       bufsize=0)
 
     def run(self):
         try:
             while self.running:
-                chunk = self.swift_process.stdout.read(CHUNK_SIZE * BYTES_PER_SAMPLE)
+                if args.mic:
+                    # Microphone input handling
+                    chunk = self.stream.read(CHUNK_SIZE, exception_on_overflow=False)
+                else:
+                    # System audio input handling
+                    chunk = self.swift_process.stdout.read(CHUNK_SIZE * BYTES_PER_SAMPLE)
                 if not chunk:
                     break
                 if self.wav_file:
@@ -184,17 +229,42 @@ class AudioCapture(threading.Thread):
         except Exception as e:
             print(f"Error during audio capture: {e}")
         finally:
-            self.swift_process.terminate()
+            if args.mic:
+                self.stream.stop_stream()
+                self.stream.close()
+                self.p.terminate()
+            else:
+                self.swift_process.terminate()
 
     def stop(self):
         self.running = False
-        self.swift_process.terminate()
+        if args.mic:
+            self.stream.stop_stream()
+            self.stream.close()
+            self.p.terminate()
+        else:
+            self.swift_process.terminate()
+
+# Add this after the imports
+def initialize_whisper():
+    """Pre-initialize whisper model"""
+    print("Initializing Whisper model...")
+    # Load model with a dummy inference
+    dummy_audio = np.zeros(SAMPLE_RATE, dtype=np.float32)
+    mlx_whisper.transcribe(
+        dummy_audio,
+        path_or_hf_repo="mlx-community/whisper-large-v3-turbo"
+    )
+    print("Whisper model initialized!")
 
 if __name__ == "__main__":
     try:
+        # Pre-initialize whisper model
+        initialize_whisper()
+        
         # Create the subtitle window
         subtitle_window = SubtitleWindow()
-
+        
         # Create queues
         process_queue = Queue(maxsize=15)
         gui_queue = Queue()
