@@ -6,13 +6,13 @@ import threading
 import wave
 from datetime import datetime
 from queue import Queue, Empty, Full
+import asyncio
 
 import mlx_whisper
 import numpy as np
 from openai import OpenAI
-import tkinter as tk
-from tkinter import ttk
-import pyaudio  # Add this import at the top
+import flet as ft
+import pyaudio
 
 # Set parameters
 SAMPLE_RATE = 16000
@@ -47,89 +47,126 @@ client = OpenAI(
 
 # Subtitle window class
 class SubtitleWindow:
-    def __init__(self):
-        self.window = tk.Tk()
-        self.window.title("即時字幕")
+    def __init__(self, page: ft.Page):
+        self.page = page
+        self.page.title = "即時字幕"
         
-        # Set window transparency and always on top
-        self.window.attributes('-alpha', 0.8, '-topmost', True)
-        
-        # Set window size and position
-        window_width = 600
-        window_height = 150  # Reduced height
-        screen_width = self.window.winfo_screenwidth()
-        screen_height = self.window.winfo_screenheight()
-        x = (screen_width - window_width) // 2
-        y = screen_height - window_height - 50
-        self.window.geometry(f'{window_width}x{window_height}+{x}+{y}')
-        
-        # Add checkbox for display mode
-        self.show_original = tk.BooleanVar()
-        self.checkbox = ttk.Checkbutton(
-            self.window,
-            text="顯示原文",
-            variable=self.show_original,
-            command=self.refresh_display
-        )
-        self.checkbox.pack(anchor='w', padx=10, pady=5)
-        
-        # Create frame for text widgets
-        self.frame = ttk.Frame(self.window)
-        self.frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Create frames for each column
-        self.original_frame = ttk.Frame(self.frame)
-        self.translated_frame = ttk.Frame(self.frame)
-        
-        # Create labels for columns
-        self.original_label = ttk.Label(
-            self.original_frame,
-            text="原文",
-            font=("Arial", 12, "bold"),
-            anchor="center"
-        )
-        self.original_label.pack(pady=(0, 5))
-        
-        self.translated_label = ttk.Label(
-            self.translated_frame,
-            text="翻譯",
-            font=("Arial", 12, "bold"),
-            anchor="center"
-        )
-        self.translated_label.pack(pady=(0, 5))
-        
-        # Create text widgets in their respective frames
-        self.original_text = tk.Text(
-            self.original_frame,
-            wrap=tk.WORD,
-            font=("Arial", 14),
-            background=self.window.cget('bg'),
-            relief=tk.FLAT,
-            padx=10,
-            width=30
-        )
-        self.original_text.pack(fill=tk.BOTH, expand=True)
-        
-        self.translated_text = tk.Text(
-            self.translated_frame,
-            wrap=tk.WORD,
-            font=("Arial", 14),
-            background=self.window.cget('bg'),
-            relief=tk.FLAT,
-            padx=10,
-            width=30
-        )
-        self.translated_text.pack(fill=tk.BOTH, expand=True)
-        
-        # Configure text alignment
-        self.original_text.tag_configure('center', justify='center')
-        self.translated_text.tag_configure('center', justify='center')
+        # Update deprecated window properties
+        self.page.window_width = 600
+        self.page.window_height = 200
+        self.page.window_opacity = 0.8
+        self.page.window_always_on_top = True
         
         # Store subtitles
         self.original_subtitles = []
         self.translated_subtitles = []
         self.current_original = ""
         self.current_translation = ""
+        
+        # Create text controls with scroll
+        self.original_text = ft.Text("", size=14)
+        self.translated_text = ft.Text("", size=14)
+        
+        # Create scrollable containers using ListView
+        self.original_scroll = ft.ListView(
+            [self.original_text],
+            expand=True,
+            auto_scroll=True,
+            spacing=10,
+            padding=10,
+        )
+        
+        self.translated_scroll = ft.ListView(
+            [self.translated_text],
+            expand=True,
+            auto_scroll=True,
+            spacing=10,
+            padding=10,
+        )
+        
+        # Create UI elements
+        self.show_original = ft.Checkbox(
+            label="顯示原文",
+            value=True,
+            on_change=lambda e: self.refresh_display()
+        )
+        
+        self.auto_scroll = ft.Checkbox(
+            label="自動滾動",
+            value=True,
+            on_change=self.toggle_auto_scroll
+        )
+        
+        # Settings panel
+        self.api_key_field = ft.TextField(
+            label="OpenAI API Key",
+            value=os.environ.get("OPENAI_API_KEY", ""),
+            password=True,  # 隱藏 API key
+            expand=True
+        )
+        
+        self.api_url_field = ft.TextField(
+            label="API URL",
+            value=os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1"),
+            expand=True
+        )
+        
+        self.settings_panel = ft.Column([
+            ft.Row([self.api_key_field], expand=True),
+            ft.Row([self.api_url_field], expand=True),
+            ft.Row([
+                ft.ElevatedButton("儲存設定", 
+                    on_click=self.save_settings
+                )
+            ], alignment=ft.MainAxisAlignment.END),
+        ], spacing=10)
+        
+        # 替代 ExpansionTile 的版本
+        self.settings_button = ft.ElevatedButton(
+            "⚙️ 設定",
+            on_click=lambda _: self.toggle_settings()
+        )
+        
+        self.settings_dialog = ft.AlertDialog(
+            title=ft.Text("設定"),
+            content=self.settings_panel,
+        )
+        
+        # Create checkbox row with settings
+        self.control_row = ft.Row([
+            self.show_original,
+            self.auto_scroll,
+            ft.Container(expand=True),  # 推動設定按鈕到右側
+            self.settings_button,
+        ])
+        
+        self.original_column = ft.Column([
+            ft.Text("原文", size=16, weight=ft.FontWeight.BOLD),
+            self.original_scroll
+        ], expand=True, alignment=ft.MainAxisAlignment.CENTER)
+        
+        self.translated_column = ft.Column([
+            ft.Text("翻譯", size=16, weight=ft.FontWeight.BOLD),
+            self.translated_scroll
+        ], expand=True, alignment=ft.MainAxisAlignment.CENTER)
+        
+        self.columns_row = ft.Row(
+            [self.original_column, self.translated_column],
+            expand=True,
+            alignment=ft.MainAxisAlignment.CENTER,
+        )
+        
+        # Add elements to page with bottom padding
+        self.page.add(
+            ft.Column([
+                self.control_row,
+                self.columns_row,
+                ft.Container(height=20),
+            ], 
+            expand=True,
+            spacing=10,
+            )
+        )
     
     def update_text(self, text, is_final=False, is_original=False):
         if is_original:
@@ -148,14 +185,8 @@ class SubtitleWindow:
         self.refresh_display()
     
     def refresh_display(self):
-        # Clear both text widgets
-        self.original_text.delete('1.0', tk.END)
-        self.translated_text.delete('1.0', tk.END)
-        
-        if self.show_original.get():
-            # Show both original and translated text side by side
-            self.original_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-            self.translated_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        if self.show_original.value:
+            self.original_column.visible = True
             
             # Update original text
             original_display = "\n\n".join(self.original_subtitles)
@@ -163,39 +194,62 @@ class SubtitleWindow:
                 if original_display:
                     original_display += "\n\n"
                 original_display += self.current_original
-            self.original_text.insert('1.0', original_display, 'center')
+            self.original_text.value = original_display
             
-            # Update translated text
-            translated_display = "\n\n".join(self.translated_subtitles)
-            if self.current_translation:
-                if translated_display:
-                    translated_display += "\n\n"
-                translated_display += self.current_translation
-            self.translated_text.insert('1.0', translated_display, 'center')
         else:
-            # Hide original text and show only translation
-            self.original_frame.pack_forget()
-            self.translated_frame.pack(fill=tk.BOTH, expand=True)
-            
-            # Update only translated text
-            translated_display = "\n\n".join(self.translated_subtitles)
-            if self.current_translation:
-                if translated_display:
-                    translated_display += "\n\n"
-                translated_display += self.current_translation
-            self.translated_text.insert('1.0', translated_display, 'center')
+            self.original_column.visible = False
         
-        # Auto-scroll to bottom
-        if self.show_original.get():
-            self.original_text.see(tk.END)
-        self.translated_text.see(tk.END)
-        self.window.update()
+        # Update translated text
+        translated_display = "\n\n".join(self.translated_subtitles)
+        if self.current_translation:
+            if translated_display:
+                translated_display += "\n\n"
+            translated_display += self.current_translation
+        self.translated_text.value = translated_display
+        
+        # Force scroll to bottom if auto_scroll is enabled
+        if self.auto_scroll.value:
+            self.original_scroll.scroll_to(offset=float('inf'), duration=0)  # 立即滾動到底部
+            self.translated_scroll.scroll_to(offset=float('inf'), duration=0)  # 立即滾動到底部
+        
+        self.page.update()
+    
+    def toggle_auto_scroll(self, e):
+        """Toggle auto scroll for both scrollable areas"""
+        self.original_scroll.auto_scroll = self.auto_scroll.value
+        self.translated_scroll.auto_scroll = self.auto_scroll.value
+        self.page.update()
+    
+    def save_settings(self, e):
+        """Save settings and update OpenAI client"""
+        api_key = self.api_key_field.value
+        api_base = self.api_url_field.value
+        
+        # Update environment variables
+        os.environ["OPENAI_API_KEY"] = api_key
+        os.environ["OPENAI_API_BASE"] = api_base
+        
+        # Update OpenAI client
+        global client
+        client = OpenAI(
+            api_key=api_key,
+            base_url=api_base,
+        )
+        
+        # Show success message
+        self.page.show_snack_bar(
+            ft.SnackBar(content=ft.Text("設定已儲存"))
+        )
+        self.page.update()
+    
+    def toggle_settings(self):
+        self.settings_dialog.open = True
+        self.page.update()
 
-def translate_text(text):
+def translate_text(text, gui_queue):
     """Translate English text to Chinese, using streaming."""
-    # Send the original text to the GUI queue
-    gui_queue.put((text, False, True))  # Added is_original=True
-    gui_queue.put((text, True, True))   # Final update for original text
+    gui_queue.put((text, False, True))
+    gui_queue.put((text, True, True))
     
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -249,7 +303,7 @@ class AudioProcessor(threading.Thread):
                     if text:
                         if args.debug:
                             print(f"[DEBUG] Transcribed text: {text}")
-                        translate_text(text)
+                        translate_text(text, self.gui_queue)
                         # Place the final translation into the GUI queue
                         # self.gui_queue.put(translated_text)
             except Empty:
@@ -350,39 +404,38 @@ def initialize_whisper():
     )
     print("Whisper model initialized!")
 
-if __name__ == "__main__":
+async def main(page: ft.Page):
     try:
         # Pre-initialize whisper model
         initialize_whisper()
         
         # Create the subtitle window
-        subtitle_window = SubtitleWindow()
+        subtitle_window = SubtitleWindow(page)
         
         # Create queues
         process_queue = Queue(maxsize=15)
         gui_queue = Queue()
 
         # Initialize and start threads
-        audio_capture = AudioCapture(process_queue, wav_file)
+        audio_capture = AudioCapture(process_queue, wav_file=wav_file)
         processor = AudioProcessor(process_queue, gui_queue)
         audio_capture.start()
         processor.start()
 
-        # Function to process GUI queue
-        def process_gui_queue():
-            try:
-                while True:
+        async def process_gui_queue():
+            while True:
+                try:
                     text, is_final, is_original = gui_queue.get_nowait()
                     subtitle_window.update_text(text, is_final, is_original)
-            except Empty:
-                pass
-            subtitle_window.window.after(100, process_gui_queue)
+                except Empty:
+                    pass
+                await asyncio.sleep(0.1)
 
         # Start processing the GUI queue
-        subtitle_window.window.after(100, process_gui_queue)
+        task = asyncio.create_task(process_gui_queue())
 
-        # Function to handle window closing
-        def on_closing():
+        async def cleanup():
+            task.cancel()
             audio_capture.stop()
             processor.stop()
             audio_capture.join()
@@ -390,25 +443,13 @@ if __name__ == "__main__":
             if wav_file:
                 wav_file.close()
                 print(f"\nAudio saved to: {filename}")
-            subtitle_window.window.destroy()
 
-        # Bind the close event
-        subtitle_window.window.protocol("WM_DELETE_WINDOW", on_closing)
+        page.on_close = cleanup
+        await page.update_async()
 
-        # Start the Tkinter main loop
-        subtitle_window.window.mainloop()
+    except Exception as e:
+        print(f"Error in main: {e}")
 
-    except KeyboardInterrupt:
-        print("\nStopped listening.")
-    finally:
-        # Ensure threads are stopped
-        if 'audio_capture' in locals():
-            audio_capture.stop()
-            audio_capture.join()
-        if 'processor' in locals():
-            processor.stop()
-            processor.join()
-        if wav_file:
-            wav_file.close()
-            print(f"\nAudio saved to: {filename}")
+if __name__ == "__main__":
+    ft.app(target=main)
 
