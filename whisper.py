@@ -51,58 +51,151 @@ class SubtitleWindow:
         self.window = tk.Tk()
         self.window.title("即時字幕")
         
-        # Set window transparency
-        self.window.attributes('-alpha', 0.8)
-        # Set window always on top
-        self.window.attributes('-topmost', True)
+        # Set window transparency and always on top
+        self.window.attributes('-alpha', 0.8, '-topmost', True)
         
         # Set window size and position
         window_width = 600
-        window_height = 100
+        window_height = 150  # Reduced height
         screen_width = self.window.winfo_screenwidth()
         screen_height = self.window.winfo_screenheight()
         x = (screen_width - window_width) // 2
-        y = screen_height - window_height - 50  # 50 pixels from bottom
+        y = screen_height - window_height - 50
         self.window.geometry(f'{window_width}x{window_height}+{x}+{y}')
         
-        # Add a list to store recent subtitles
-        self.recent_subtitles = []
-        self.max_lines = 3
-        self.current_translation = ""  # Track current streaming translation
-        
-        # Create label to display subtitles
-        self.label = ttk.Label(
-            self.window, 
-            wraplength=580,
-            justify="center",
-            font=("Arial", 14)
+        # Add checkbox for display mode
+        self.show_original = tk.BooleanVar()
+        self.checkbox = ttk.Checkbutton(
+            self.window,
+            text="顯示原文",
+            variable=self.show_original,
+            command=self.refresh_display
         )
-        self.label.pack(expand=True)
+        self.checkbox.pack(anchor='w', padx=10, pady=5)
+        
+        # Create frame for text widgets
+        self.frame = ttk.Frame(self.window)
+        self.frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Create frames for each column
+        self.original_frame = ttk.Frame(self.frame)
+        self.translated_frame = ttk.Frame(self.frame)
+        
+        # Create labels for columns
+        self.original_label = ttk.Label(
+            self.original_frame,
+            text="原文",
+            font=("Arial", 12, "bold"),
+            anchor="center"
+        )
+        self.original_label.pack(pady=(0, 5))
+        
+        self.translated_label = ttk.Label(
+            self.translated_frame,
+            text="翻譯",
+            font=("Arial", 12, "bold"),
+            anchor="center"
+        )
+        self.translated_label.pack(pady=(0, 5))
+        
+        # Create text widgets in their respective frames
+        self.original_text = tk.Text(
+            self.original_frame,
+            wrap=tk.WORD,
+            font=("Arial", 14),
+            background=self.window.cget('bg'),
+            relief=tk.FLAT,
+            padx=10,
+            width=30
+        )
+        self.original_text.pack(fill=tk.BOTH, expand=True)
+        
+        self.translated_text = tk.Text(
+            self.translated_frame,
+            wrap=tk.WORD,
+            font=("Arial", 14),
+            background=self.window.cget('bg'),
+            relief=tk.FLAT,
+            padx=10,
+            width=30
+        )
+        self.translated_text.pack(fill=tk.BOTH, expand=True)
+        
+        # Configure text alignment
+        self.original_text.tag_configure('center', justify='center')
+        self.translated_text.tag_configure('center', justify='center')
+        
+        # Store subtitles
+        self.original_subtitles = []
+        self.translated_subtitles = []
+        self.current_original = ""
+        self.current_translation = ""
     
-    def update_text(self, text, is_final=False):
-        if is_final:
-            # When translation is complete
-            self.recent_subtitles.append(self.current_translation)
-            if len(self.recent_subtitles) > self.max_lines:
-                self.recent_subtitles.pop(0)
-            self.current_translation = ""  # Reset current translation
+    def update_text(self, text, is_final=False, is_original=False):
+        if is_original:
+            if is_final:
+                self.original_subtitles.append(self.current_original)
+                self.current_original = ""
+            else:
+                self.current_original = text
         else:
-            # During streaming, update only the current translation
-            self.current_translation = text
+            if is_final:
+                self.translated_subtitles.append(self.current_translation)
+                self.current_translation = ""
+            else:
+                self.current_translation = text
+        
+        self.refresh_display()
+    
+    def refresh_display(self):
+        # Clear both text widgets
+        self.original_text.delete('1.0', tk.END)
+        self.translated_text.delete('1.0', tk.END)
+        
+        if self.show_original.get():
+            # Show both original and translated text side by side
+            self.original_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            self.translated_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
             
-        # Combine previous subtitles with current translation
-        display_lines = self.recent_subtitles[-self.max_lines:] if self.recent_subtitles else []
-        if self.current_translation:
-            display_lines.append(self.current_translation)
+            # Update original text
+            original_display = "\n\n".join(self.original_subtitles)
+            if self.current_original:
+                if original_display:
+                    original_display += "\n\n"
+                original_display += self.current_original
+            self.original_text.insert('1.0', original_display, 'center')
             
-        display_text = "\n".join(display_lines)
-        self.label.config(text=display_text)
+            # Update translated text
+            translated_display = "\n\n".join(self.translated_subtitles)
+            if self.current_translation:
+                if translated_display:
+                    translated_display += "\n\n"
+                translated_display += self.current_translation
+            self.translated_text.insert('1.0', translated_display, 'center')
+        else:
+            # Hide original text and show only translation
+            self.original_frame.pack_forget()
+            self.translated_frame.pack(fill=tk.BOTH, expand=True)
+            
+            # Update only translated text
+            translated_display = "\n\n".join(self.translated_subtitles)
+            if self.current_translation:
+                if translated_display:
+                    translated_display += "\n\n"
+                translated_display += self.current_translation
+            self.translated_text.insert('1.0', translated_display, 'center')
+        
+        # Auto-scroll to bottom
+        if self.show_original.get():
+            self.original_text.see(tk.END)
+        self.translated_text.see(tk.END)
         self.window.update()
 
 def translate_text(text):
     """Translate English text to Chinese, using streaming."""
     # Send the original text to the GUI queue
-    gui_queue.put((text, False))
+    gui_queue.put((text, False, True))  # Added is_original=True
+    gui_queue.put((text, True, True))   # Final update for original text
     
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -121,10 +214,10 @@ def translate_text(text):
             full_response += content
             print(content, end="", flush=True)
             # Send streaming update with is_final=False
-            gui_queue.put((full_response, False))
+            gui_queue.put((full_response, False, False))  # Added is_original=False
     print()
     # Send final update with is_final=True
-    gui_queue.put((full_response, True))
+    gui_queue.put((full_response, True, False))  # Added is_original=False
     return full_response
 
 class AudioProcessor(threading.Thread):
@@ -279,8 +372,8 @@ if __name__ == "__main__":
         def process_gui_queue():
             try:
                 while True:
-                    text, is_final = gui_queue.get_nowait()
-                    subtitle_window.update_text(text, is_final)
+                    text, is_final, is_original = gui_queue.get_nowait()
+                    subtitle_window.update_text(text, is_final, is_original)
             except Empty:
                 pass
             subtitle_window.window.after(100, process_gui_queue)
