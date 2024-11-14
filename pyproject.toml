@@ -40,3 +40,8 @@ select = [
 
 [tool.ruff.lint.isort]
 force-single-line = true
+
+[tool.flet.paths]
+assets = [
+    "SystemAudioCapture"
+]

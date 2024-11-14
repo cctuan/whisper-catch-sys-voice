@@ -7,6 +7,10 @@ import wave
 from datetime import datetime
 from queue import Queue, Empty, Full
 import asyncio
+import logging
+import traceback
+from pathlib import Path
+from logging.handlers import RotatingFileHandler
 
 import mlx_whisper
 import numpy as np
@@ -266,7 +270,7 @@ def translate_text(text, gui_queue):
         if chunk.choices[0].delta.content is not None:
             content = chunk.choices[0].delta.content
             full_response += content
-            print(content, end="", flush=True)
+            # print(content, end="", flush=True)
             # Send streaming update with is_final=False
             gui_queue.put((full_response, False, False))  # Added is_original=False
     print()
@@ -315,12 +319,24 @@ class AudioProcessor(threading.Thread):
         self.running = False
 
 def get_executable_path(file_name):
-    # 若程式是以打包形式執行，使用 sys._MEIPASS 路徑
+    """Get the path for executable files"""
     if hasattr(sys, '_MEIPASS'):
-        return os.path.join(sys._MEIPASS, file_name)
+        # 打包模式：直接從打包目錄讀取
+        exe_path = Path(sys._MEIPASS) / file_name
     else:
-        # 若非打包執行，直接使用原始路徑
-        return os.path.join(os.path.dirname(__file__), '.build/release', file_name)
+        # 開發模式：從專案根目錄讀取
+        exe_path = Path(__file__).parent / file_name
+    
+    if not exe_path.exists():
+        raise FileNotFoundError(f"Could not find {file_name} at {exe_path}")
+    
+    # 確保檔案有執行權限
+    try:
+        exe_path.chmod(0o755)  # rwxr-xr-x
+    except Exception as e:
+        logging.warning(f"Could not set executable permissions: {e}")
+    
+    return str(exe_path)
 
 
 class AudioCapture(threading.Thread):
@@ -404,10 +420,93 @@ def initialize_whisper():
     )
     print("Whisper model initialized!")
 
+def get_app_log_dir():
+    """Get the application log directory"""
+    # macOS: ~/Library/Application Support/YourAppName
+    if sys.platform == 'darwin':
+        app_support_dir = Path.home() / 'Library' / 'Application Support' / 'LiveSubtitle'
+    # Windows: %APPDATA%\YourAppName
+    elif sys.platform == 'win32':
+        app_support_dir = Path(os.getenv('APPDATA')) / 'LiveSubtitle'
+    # Linux: ~/.local/share/YourAppName
+    else:
+        app_support_dir = Path.home() / '.local' / 'share' / 'LiveSubtitle'
+    
+    # 確保目錄存在
+    app_support_dir.mkdir(parents=True, exist_ok=True)
+    return app_support_dir
+
+def setup_logging():
+    """Setup logging configuration"""
+    log_dir = get_app_log_dir()
+    log_file = log_dir / 'app.log'
+    
+    # 設置日誌格式
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            # 檔案處理器：保留最近 5 個日誌檔案，每個最大 1MB
+            RotatingFileHandler(
+                log_file,
+                maxBytes=1024 * 1024,  # 1MB
+                backupCount=5,
+                encoding='utf-8'
+            ),
+            # 控制台處理器
+            logging.StreamHandler()
+        ]
+    )
+    
+    # 記錄應用程式啟動資訊
+    logging.info(f"Application started. Log file: {log_file}")
+    logging.info(f"Python version: {sys.version}")
+    logging.info(f"Platform: {sys.platform}")
+    logging.info(f"Working directory: {os.getcwd()}")
+
 async def main(page: ft.Page):
     try:
-        # Pre-initialize whisper model
-        initialize_whisper()
+        # 設置日誌
+        setup_logging()
+        logging.info("Application starting...")
+        
+        # 顯示啟動對話框
+        progress = ft.ProgressBar(width=300)
+        dlg = ft.AlertDialog(
+            title=ft.Text("初始化中..."),
+            content=ft.Column([
+                ft.Text("正在載入必要組件，請稍候..."),
+                progress
+            ]),
+        )
+        page.dialog = dlg
+        dlg.open = True
+        await page.update_async()
+        
+        try:
+            # Pre-initialize whisper model
+            logging.info("Initializing Whisper model...")
+            initialize_whisper()
+            logging.info("Whisper model initialized successfully")
+        except Exception as e:
+            logging.error(f"Failed to initialize Whisper model: {e}")
+            logging.error(traceback.format_exc())
+            # 顯示錯誤對話框
+            error_dlg = ft.AlertDialog(
+                title=ft.Text("初始化失敗"),
+                content=ft.Text(f"無法初始化語音辨識模型：\n{str(e)}"),
+                actions=[
+                    ft.TextButton("關閉", on_click=lambda _: page.window_close())
+                ],
+            )
+            page.dialog = error_dlg
+            error_dlg.open = True
+            await page.update_async()
+            return
+
+        # 關閉進度對話框
+        dlg.open = False
+        await page.update_async()
         
         # Create the subtitle window
         subtitle_window = SubtitleWindow(page)
@@ -448,8 +547,29 @@ async def main(page: ft.Page):
         await page.update_async()
 
     except Exception as e:
-        print(f"Error in main: {e}")
+        logging.error(f"Critical error in main: {e}")
+        logging.error(traceback.format_exc())
+        # 顯示錯誤對話框
+        error_dlg = ft.AlertDialog(
+            title=ft.Text("錯誤"),
+            content=ft.Text(f"應用程式發生錯誤：\n{str(e)}"),
+            actions=[
+                ft.TextButton("關閉", on_click=lambda _: page.window_close())
+            ],
+        )
+        page.dialog = error_dlg
+        error_dlg.open = True
+        await page.update_async()
+
+# 在主程式開始時加入版本資訊
+VERSION = "1.0.0"  # 你的應用程式版本
 
 if __name__ == "__main__":
-    ft.app(target=main)
+    try:
+        setup_logging()
+        logging.info(f"Starting LiveSubtitle version {VERSION}")
+        ft.app(target=main)
+    except Exception as e:
+        logging.critical(f"Failed to start application: {e}")
+        logging.critical(traceback.format_exc())
 
